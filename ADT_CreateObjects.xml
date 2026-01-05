@@ -353,6 +353,14 @@
 														(objSetData theAnchor 'ADT_anchoredShip theShip)
 														(objRegisterForEvents theAnchor theShip)	;;	this is so that the anchor can delete itself if the ship is deleted/destroyed
 													)
+												(= mode "attack")
+													(block
+														(
+															(theShip (sysCreateShip theType spawnPos sov))
+															(theTarget (or (objGetTarget gPlayerShip) gPlayerShip))
+														)
+														(shpOrder theShip 'attack theTarget)
+													)
 												(= mode "hunt")
 													(sysCreateShip theType spawnPos sov &ADT_evCreateObjectControllerHunt;)
 												(= mode "patrol")
@@ -597,7 +605,7 @@
 							(shpOrder gSource 'attack target)
 							(objSet@ gSource "adt.objCreate.curTarget" (objGetId target))
 						)
-						(shpOrder gSource 'gate)
+						(shpOrder gSource 'waitForEnemy 300)
 					)
 				)
 			</OnEventHandlerInit>
@@ -612,7 +620,7 @@
 							(objSet@ gSource "adt.objCreate.curTarget" (objGetId target))
 						)
 						(block ()
-							(shpOrder gSource 'gate)
+							(shpOrder gSource 'waitForEnemy 300)
 							(objSet@ gSource "adt.objCreate.curTarget" ())
 						)
 					)
@@ -710,6 +718,7 @@
 						defend: "Defend a fixed location"
 						hunt: "Hunt down enemy ships in this system"
 						patrol: "Patrol this system"
+						attack: "Attack target, or player if no target"
 					})
 
 					(setq ADT_objCreateLocationUI {
