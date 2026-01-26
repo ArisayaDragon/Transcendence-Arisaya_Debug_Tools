@@ -114,8 +114,8 @@
 									(
 										(option (item optionEntry 3))
 										(itmType (@ option 'itemType))
-										(doInstall (itmMatches itmType "d"))	;;	only install devices, separate system for armor
-										(doArmorInstall (itmMatches itmType "a"))
+										(doInstall (itmMatches itmType "d^V"))	;;	only install devices, separate system for armor
+										(doArmorInstall (itmMatches itmType "a^V"))
 										(quantity (if doArmorInstall (shpGetArmorCount gPlayerShip) 1))
 										(theItem (itmCreate itmType quantity))
 									)
