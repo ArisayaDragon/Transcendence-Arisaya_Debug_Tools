@@ -1639,7 +1639,7 @@
 						)
 						(if theShield
 							(if (objIsDeviceEnabled ship theShield)
-								(shpRechargeShield ship ADT_giantInt)
+								(shpRechargeShield ship)
 							)
 						)
 					)))
