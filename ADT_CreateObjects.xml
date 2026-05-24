@@ -644,7 +644,7 @@
 					(
 						(patrolList (list ))
 						(gates (sysFindObject () "G"))
-						(friendlyStations (sysFindObject () "TAF"))
+						(friendlyStations (sysFindObject gSource "TAF"))
 						;	these are fallbacks if we dont have enough stuff in the system
 						(origin (vector '(0 0)))
 						(randomInnerSystemLocation (sysVectorPolarOffset origin (random 0 360) (random 150 300)))
