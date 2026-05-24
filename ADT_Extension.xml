@@ -116,7 +116,7 @@
 	UNID="&ADT_unidExtension;"
 	release="1"
 	version="0.4.0.0"
-	apiVersion="57"
+	apiVersion="59"
 	extends="&unidCoreTypesLibrary;">
 
 	<!-- INSTRUCTIONS

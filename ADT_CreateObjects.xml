@@ -361,6 +361,14 @@
 														)
 														(shpOrder theShip 'attack theTarget)
 													)
+												(= mode "escort")
+													(block
+														(
+															(theShip (sysCreateShip theType spawnPos sov))
+															(theTarget (or (objGetTarget gPlayerShip) gPlayerShip))
+														)
+														(shpOrder theShip 'escort theTarget)
+													)
 												(= mode "hunt")
 													(sysCreateShip theType spawnPos sov &ADT_evCreateObjectControllerHunt;)
 												(= mode "patrol")
@@ -375,7 +383,7 @@
 												)
 											)
 										)
-										(sysCreateStation thetype spawnPos)
+										(sysCreateStation thetype spawnPos {ignoreLimits: True})
 									)
 									(ADT_setTemp 'cursor 0)
 									(scrExitScreen gScreen 'forceUndock)
@@ -652,6 +660,7 @@
 					(if (ls (count patrolList) 3)
 						(lnkAppend patrolList randomOuterSystemLocation)
 					)
+					patrolList
 				)
 			</Data>
 			<Data id="adt.objCreate.patrolIdx">
@@ -719,6 +728,7 @@
 						hunt: "Hunt down enemy ships in this system"
 						patrol: "Patrol this system"
 						attack: "Attack target, or player if no target"
+						escort:	"Escort target, or player if no target"
 					})
 
 					(setq ADT_objCreateLocationUI {
