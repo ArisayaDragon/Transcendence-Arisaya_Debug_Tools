@@ -640,21 +640,29 @@
 	<Type UNID="&ADT_evCreateObjectControllerPatrol;">
 		<Properties>
 			<!-- Config -->
-			<Data id="adt.objCreate.maxClusterDistance">
+			<Data id="adt.objCreate.patrol.maxClusterDistance">
 				;	Max distance from a higher priority object that we will search
 				;	for lower priority objects to patrol from
 				50
 			</Data>
-			<Data id="adt.objCreate.maxAggroRange">
+			<Data id="adt.objCreate.patrol.maxAggroRange">
 				;	Max distance we will scan for hostiles from our patrol route
-				100
+				60
+			</Data>
+			<Data id="adt.objCreate.patrol.aggroScanRate">
+				;	Rate at which we scan for hostiles (in ticks)
+				60
 			</Data>
 			<Data id="adt.objCreate.patrol.minHealth">
 				;	If we are below this health fraction we flee to a friendly station to repair if one exists
 				0.2
 			</Data>
+			<Data id="adt.objCreate.patrol.ignorePlayer">
+				;	If non-nil, we ignore player aggression
+				1
+			</Data>
 			<!-- Internal state -->
-			<Data id="adt.objCreate.ownedMarkers">
+			<Data id="adt.objCreate.patrol.ownedMarkers">
 			</Data>
 			<Data id="adt.objCreate.patrolIdx">
 			</Data>
@@ -713,7 +721,7 @@
 						(randomOuterSystemLocation (sysVectorPolarOffset origin (random 0 360) (random 450 700)))
 
 						;	Other vars
-						(maxClusterDist (obj@ gSource "adt.objCreate.maxClusterDistance"))
+						(maxClusterDist (obj@ gSource "adt.objCreate.patrol.maxClusterDistance"))
 
 						;	state tracking var containers
 						;	This is a horrifically jank workaround to a bug or limitation with tlisp scopes
@@ -843,7 +851,7 @@
 
 					;	Track any special markers we created for ourself
 
-					(objSet@ gSource "adt.objCreate.ownedMarkers" markerList)
+					(objSet@ gSource "adt.objCreate.patrol.ownedMarkers" markerList)
 
 					;	Figure out the order in which we patrol
 
@@ -1184,8 +1192,55 @@
 					(objSet@ gSource "adt.objCreate.patrolIdx" 0)
 					(objSet@ gSource "adt.objCreate.patrolState" 'patrol)
 					(shpOrder gSource 'approach navObj 10)
+					(sysAddObjRecurringTimerEvent (obj@ gSource "adt.objCreate.patrol.aggroScanRate") gSource "adt.patrolScan")
 				)
 			</OnEventHandlerInit>
+			<adt.patrolScan>
+				(block
+					(
+						(state (obj@ gSource "adt.objCreate.patrolState"))
+						(scanRange (obj@ gSource "adt.objCreate.patrol.maxAggroRange"))
+					)
+					(switch
+						;	We only scan and attack hostiles while on patrol
+
+						(= state "patrol")
+							(block
+								(
+									(ignorePlayer (obj@ gSource "adt.objCreate.patrol.ignorePlayer"))
+									;	Note that we only look for ships we can actually see
+									(baseHostileCriteria (if ignorePlayer "sAEZP" "sAEP"))
+									(rangedHostileCriteria (if (gr scanRange 0) (cat baseHostileCriteria " NN:" scanRange) (cat baseHostileCriteria " N")))
+									(nearestHostileShip (sysFindObject gSource rangedHostileCriteria))
+								)
+								(if nearestHostileShip
+									(block ()
+										(shpCancelOrders gSource)
+										(objSet@ gSource "adt.objCreate.patrolState" "attacking")
+										(shpOrder gSource 'attack nearestHostileShip)
+									)
+								)
+							)
+
+						;	Ensure our target hasnt escaped
+
+						(= state "attacking")
+							(if
+								(gr
+									(sysVectorDistance (objGetPos gSource) (objGetPos (objGetTarget gSource)))
+									(* scanRange 1.5)
+								)
+								;	Break off our attack if it got away
+								;	we let onOrdersCompleted run to resume course
+								(shpCancelOrders gSource)
+							)
+
+						;	Otherwise we continue on as normal
+						
+						()
+					)
+				)
+			</adt.patrolScan>
 			<OnOrdersCompleted>
 				(block
 					(
@@ -1237,6 +1292,7 @@
 				(block
 					(
 						(state (obj@ gSource "adt.objCreate.patrolState"))
+						(ignorePlayer (obj@ gSource "adt.objCreate.patrol.ignorePlayer"))
 						(wasTargeted (= gSource (objGetTarget aOrderGiver)))
 					)
 					(switch
@@ -1266,9 +1322,13 @@
 									)
 								)
 							)
+						
+						;	If we are configured to ignore the player we do so
+						(and ignorePlayer (= aOrderGiver gPlayerShip))
+							()
 
 						;	If we are fighting already then keep fighting
-						(= state "retaliating")
+						(or (= state "retaliating") (= state "attacking"))
 							()
 
 						;	If no one is reponsible, then nothing to do
@@ -1302,7 +1362,7 @@
 			</OnAttacked>
 			<OnDestroy>
 				;	Cleanup any nav markers
-				(enum (obj@ gSource "adt.objCreate.ownedMarkers") ownedMarker (objRemove (objGetObjByID ownedMarker)))
+				(enum (obj@ gSource "adt.objCreate.patrol.ownedMarkers") ownedMarker (objRemove (objGetObjByID ownedMarker)))
 			</OnDestroy>
 		</Events>
 	</Type>
