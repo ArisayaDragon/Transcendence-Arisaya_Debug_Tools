@@ -317,6 +317,68 @@
 						(ADT_bitEq a bit 1)
 					))
 
+					;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+					;;	List Functions
+					;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+					;;	Transfer an element from one list to another
+					;;	This is an in-place operation
+					(setq ADT_lnkMove (lambda (src idx dest destIdx)
+						"Transfer an element from one list (src) to another (dest). If destIdx is nil, the element is appended to dest."
+						(block
+							(
+								(val (@ src idx))
+							)
+							(if destIdx
+								;	We need to insert the new value and then append the original trailing section
+								(block
+									(
+										(sliceToMove (slice dest destIdx))
+									)
+									(while (gr (count dest) destIdx)
+										(lnkRemove dest destIdx)
+									)
+									(lnkAppend dest val)
+									(enum sliceToMove moveVal (lnkAppend dest moveVal))
+								)
+								;	We just move it to the end of dest
+								(block ()
+									(lnkAppend dest val)
+									(lnkRemove src idx)
+								)
+							)
+							;	Return dest
+							dest
+						)
+					))
+
+					;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+					;;	Obj Functions
+					;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+					;;	Find nearest object in list to provided object
+					(setq ADT_objFindNearest (lambda (obj objList maxDist)
+						(if obj
+							(block
+								(
+									(srcPos (objGetPos obj))
+									(closestObj 
+										(map objList '(reduceMin original) targetObj (sysVectorDistance srcPos (objGetPos targetObj)))
+									)
+									(dist (sysVectorDistance srcPos (objGetPos closestObj)))
+								)
+								;(dbgLog (cat "closest to " obj " at " srcPos " is " closestObj " at " dist " units"))
+								(if (or (leq dist maxDist) (not maxDist))
+									;	Return the obj
+									closestObj
+									;	otherwise nil
+									()
+								)
+							)
+							;	If obj is nil we return nil
+							()
+						)
+					))
 				)
 			</ADT.onLoadGlobals>
 		</Events>
