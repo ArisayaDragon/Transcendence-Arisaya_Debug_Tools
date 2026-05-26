@@ -209,14 +209,33 @@
 			 	(
 					(pickerList (list))
 					(idx (ADT_getTemp 'cursor))
-					(filterCriteriaDefault "sT")
+					(filterCriteriaDefault "sTV")
 					(filterCriteriaRaw (or (@ gData 'criteria) filterCriteriaDefault))
 					(firstCriteria (@ (strSplit filterCriteriaRaw " ") 0))
 					(firstCriteriaIsSecondary (or (strBeginsWith firstCriteria "+") (strBeginsWith firstCriteria "-") (strBeginsWith firstCriteria "=")))
 					(primaryCriteria
 						(if firstCriteriaIsSecondary filterCriteriaDefault
-							;;	we allow t T or s so we only need to be case sensitive on s
-							(if (eq (count (strReplace (strReplace (strReplace firstCriteria "s" "/" 'case) "t" "/") "/" "")) 0)
+							;;	we allow t T or s and V so we only need to be case sensitive on s and V
+							(if (and
+									(or
+										;;	we must have t, T, or s
+										;;	V is not mandatory
+										(strFind firstCriteria "s" 'case)
+										(strFind firstCriteria "t")
+									)
+									(eq (count
+										(strReplace
+											(strReplace
+												(strReplace
+													(strReplace firstCriteria "s" "/" 'case)
+													"t" "/"
+												)
+												"V" "/" 'case
+											)
+											"/" ""
+										)
+									) 0)
+								)
 								;;	if we eliminted all characters we are good to go
 								firstCriteria
 								;;	otherwise we have invalid characters and just use the default
@@ -661,7 +680,24 @@
 				;	If non-nil, we ignore player aggression
 				1
 			</Data>
+			<Data id="adt.objCreate.patrol.criteriaP0">
+				;	Priority 0 (highest) patrol criteria
+				"G"
+			</Data>
+			<Data id="adt.objCreate.patrol.criteriaP1">
+				"TAF +primary"
+			</Data>
+			<Data id="adt.objCreate.patrol.criteriaP2">
+				"TAF -primary +majorStation"
+			</Data>
+			<Data id="adt.objCreate.patrol.criteriaP3">
+				"TAF -primary -majorStation"
+			</Data>
+			<Data id="adt.objCreate.patrol.criteriaP4">
+			</Data>
+
 			<!-- Internal state -->
+
 			<Data id="adt.objCreate.patrol.ownedMarkers">
 			</Data>
 			<Data id="adt.objCreate.patrolIdx">
@@ -689,29 +725,53 @@
 				(block
 					(
 						(patrolTargetList (list ))
+						(criteriaP0 (obj@ gSource "adt.objCreate.patrol.criteriaP0"))
+						(criteriaP1 (obj@ gSource "adt.objCreate.patrol.criteriaP1"))
+						(criteriaP2 (obj@ gSource "adt.objCreate.patrol.criteriaP2"))
+						(criteriaP3 (obj@ gSource "adt.objCreate.patrol.criteriaP3"))
+						(criteriaP4 (obj@ gSource "adt.objCreate.patrol.criteriaP4"))
+
+						;	Mutable nil override of sysFindObject
+						(fnSysFindObjectMutable (lambda (src criteria)
+							(block
+								(
+									(result (sysFindObject src criteria))
+								)
+								(if (=== result)
+									; if the result is atomic nil return a mutable nil list instead
+									(list )
+									; otherwise return as normal
+									result
+								)
+							)
+						))
 						
 						;	Priority 0 locations include:
 						;	stargates
-						(patrolTargetListP0 (sysFindObject () "G"))
+						(patrolTargetListP0
+							(fnSysFindObjectMutable gSource criteriaP0)
+						)
 
 						;	Priority 1 locations include:
 						(patrolTargetListP1
-							(sysFindObject gSource "TAF +primary")
+							(fnSysFindObjectMutable gSource criteriaP1)
 						)
 
 						;	Priority 2 locations include:
 						(patrolTargetListP2
-							(sysFindObject gSource "TAF -primary +majorStation")
+							(fnSysFindObjectMutable gSource criteriaP2)
 						)
 
 						;	Priority 3 locations include:
 						(patrolTargetListP3
-							(sysFindObject gSource "TAF -primary -majorStation")
+							(fnSysFindObjectMutable gSource criteriaP3)
 						)
 
 						;	Priority 4 locations include:
 						;	random position markers in the system
-						(patrolTargetListP4 (list ))
+						(patrolTargetListP4
+							(fnSysFindObjectMutable gSource criteriaP4)
+						)
 
 						(patrolList (list ))
 						(markerList (list ))
@@ -1177,6 +1237,9 @@
 					(map patrolList patrolObj (objGetID patrolObj))
 				)
 			</DynamicData>
+
+			<!-- Patrol list -->
+
 			<Data id="adt.objCreate.patrolList">
 				(obj@ gSource "adt.objCreate.patrolList.generate")
 			</Data>
