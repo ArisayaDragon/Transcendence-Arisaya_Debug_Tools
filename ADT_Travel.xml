@@ -564,6 +564,7 @@
 								gateType
 								(list 'location locationCriteria)
 								toGate
+								{ignoreLimits: True}
 							))
 								
 							;;	If we could not create the gate, it is probably because we did not
@@ -571,7 +572,12 @@
 							;;	handle it here.
 							
 							(if (not gateObj)
-								(setq gateObj (sysCreateStargate gateType (sysVectorRandom () (random 500 600) 10) toGate))
+								(setq gateObj (sysCreateStargate
+									gateType
+									(sysVectorRandom () (random 500 600) 10)
+									toGate
+									{ignoreLimits: True}
+								))
 							)
 								
 							;;	Debug gates are never considered coreward
@@ -581,8 +587,8 @@
 								
 							;;	Create beacons
 
-							(sysCreateStation beaconType beacon1Pos)
-							(sysCreateStation beaconType beacon2Pos)
+							(sysCreateStation beaconType beacon1Pos {ignoreLimits: True})
+							(sysCreateStation beaconType beacon2Pos {ignoreLimits: True})
 
 							;;	Move player to gate
 
@@ -763,6 +769,7 @@
 										gateType
 										(objGetPos gPlayerShip)
 										fromGate
+										{ignoreLimits: True}
 									))
 									(setq beacon1Pos (sysVectorPolarOffset gateObj 270 12))
 									(setq beacon2Pos (sysVectorPolarOffset gateObj 0 12))
