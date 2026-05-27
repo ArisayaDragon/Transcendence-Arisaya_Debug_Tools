@@ -661,8 +661,33 @@
 			<!-- Config -->
 			<Data id="adt.objCreate.patrol.maxClusterDistance">
 				;	Max distance from a higher priority object that we will search
-				;	for lower priority objects to patrol from
-				50
+				;	for lower or equal priority objects to patrol from
+				200
+			</Data>
+			<Data id="adt.objCreate.patrol.maxClusterDistRatio">
+				;	ratio by which we decrease the max cluster distance for lower
+				;	priority objects we treat as being in one cluster
+				;	eg:
+				;		maxClusterDistance = 200
+				;		maxClusterDistRatio = 0.5
+				;		maxClusterDistanceP1 = 100
+				;		maxClusterDistanceP2 = 50
+				;		maxClusterDistanceP3 = 25
+				0.5
+			</Data>
+			<Data id="adt.objCreate.patrol.hubPriorityLevel">
+				;	At and above this priority level, we treat these objects as
+				;	hubs and will return to them after patrolling each lower-priority sub-cluster
+				;	Lower-priority clusters are patrolled in a round-robin manner
+				1
+			</Data>
+			<Data id="adt.objCreate.patrol.randomOrder">
+				;	If non-nil, shuffle the order of objects
+				1
+			</Data>
+			<Data id="adt.objCreate.patrol.skipClusteredChildren">
+				;	If non-nil, we skip any patrol targets with a parent and no children
+				1
 			</Data>
 			<Data id="adt.objCreate.patrol.maxAggroRange">
 				;	Max distance we will scan for hostiles from our patrol route
@@ -705,7 +730,7 @@
 			<Data id="adt.objCreate.patrolState">
 			</Data>
 			<DynamicData id="adt.objCreate.patrol.health">
-				(min (/ (obj@ gSource 'hp) (obj@ gSource 'maxHp)) (/ (obj@ gSource 'interiorHP) (obj@ gSource 'maxInteriorHP)))
+				(max (/ (obj@ gSource 'hp) (obj@ gSource 'maxHp)) (/ (obj@ gSource 'interiorHP) (obj@ gSource 'maxInteriorHP)))
 			</DynamicData>
 			<DynamicData id="adt.objCreate.patrol.debug">
 				(block
@@ -724,15 +749,20 @@
 			<DynamicData id="adt.objCreate.patrolList.generate">
 				(block
 					(
+						;	print debug stats
+						(printDebugStats ())
+
+						;	Init vars
 						(patrolTargetList (list ))
 						(criteriaP0 (obj@ gSource "adt.objCreate.patrol.criteriaP0"))
 						(criteriaP1 (obj@ gSource "adt.objCreate.patrol.criteriaP1"))
 						(criteriaP2 (obj@ gSource "adt.objCreate.patrol.criteriaP2"))
 						(criteriaP3 (obj@ gSource "adt.objCreate.patrol.criteriaP3"))
 						(criteriaP4 (obj@ gSource "adt.objCreate.patrol.criteriaP4"))
+						(shuffleOrder (obj@ gSource "adt.objCreate.patrol.randomOrder"))
 
 						;	Mutable nil override of sysFindObject
-						(fnSysFindObjectMutable (lambda (src criteria)
+						(fnSysFindObjectMutable (lambda (src criteria shuffle)
 							(block
 								(
 									(result (sysFindObject src criteria))
@@ -741,7 +771,10 @@
 									; if the result is atomic nil return a mutable nil list instead
 									(list )
 									; otherwise return as normal
-									result
+									(if shuffle
+										(shuffle result)
+										result
+									)
 								)
 							)
 						))
@@ -780,461 +813,264 @@
 						(randomInnerSystemLocation (sysVectorPolarOffset origin (random 0 360) (random 150 300)))
 						(randomOuterSystemLocation (sysVectorPolarOffset origin (random 0 360) (random 450 700)))
 
-						;	Other vars
-						(maxClusterDist (obj@ gSource "adt.objCreate.patrol.maxClusterDistance"))
-
-						;	state tracking var containers
-						;	This is a horrifically jank workaround to a bug or limitation with tlisp scopes
-						(_curP (list 0))
-						(_objP0 (list ()))
-						(_objP1 (list ()))
-						(_objP2 (list ()))
-						(_objP3 (list ()))
-						(_objP4 (list ()))
-
-						;	state tracking var accessors
-						(curP (lambda () (@ _curP 0)))
-						(objP0 (lambda () (@ _objP0 0)))
-						(objP1 (lambda () (@ _objP1 0)))
-						(objP2 (lambda () (@ _objP2 0)))
-						(objP3 (lambda () (@ _objP3 0)))
-						(objP4 (lambda () (@ _objP4 0)))
-
-						;	state tracking var setters
-						(curP= (lambda (val) (lnkReplace _curP 0 val)))
-						(objP0= (lambda (val) (lnkReplace _objP0 0 val)))
-						(objP1= (lambda (val) (lnkReplace _objP1 0 val)))
-						(objP2= (lambda (val) (lnkReplace _objP2 0 val)))
-						(objP3= (lambda (val) (lnkReplace _objP3 0 val)))
-						(objP4= (lambda (val) (lnkReplace _objP4 0 val)))
-
-						;	helper functions
-						(fnGetPatrolListAtPriority (lambda (priority)
+						;	Compute clusters
+						(maxClusterDist (max (obj@ gSource "adt.objCreate.patrol.maxClusterDistance") 0.0))
+						(maxClusterDistRatio (min (max (obj@ gSource "adt.objCreate.patrol.maxClusterDistRatio") 0.0) 1.0))
+						(hubPriorityThreshold (obj@ gSource "adt.objCreate.patrol.hubPriorityLevel"))
+						
+						;	Cluster helpers
+						(fnPriorityClusterSize (lambda (priority)
 							(switch
+								; P0 is always the specified max
 								(= priority 0)
-									patrolTargetListP0
-								(= priority 1)
-									patrolTargetListP1
-								(= priority 2)
-									patrolTargetListP2
-								(= priority 3)
-									patrolTargetListP3
-								(= priority 4)
-									patrolTargetListP4
-								(error (cat "Invalid priority level specified: " priority))
+									maxClusterDist
+								; P1 and beyond we compute
+								(ls priority 5)
+									(* maxClusterDist (pow maxClusterDistRatio priority))
+								; error
+								(error (cat "Priority cannot be higher than 4. Got: " priority))
 							)
 						))
-						(fnSetObjPNAt (lambda (priority newObj)
+						(fnIsHubPriority (lambda (priority)
+							(ls priority (+ 1 hubPriorityThreshold))
+						))
+						(fnFindBestParent (lambda (obj objPriority)
 							(switch
-								(= priority 0)
-									(objP0= newObj)
-								(= priority 1)
-									(objP1= newObj)
-								(= priority 2)
-									(objP2= newObj)
-								(= priority 3)
-									(objP3= newObj)
-								(= priority 4)
-									(objP4= newObj)
-								(error (cat "Invalid priority level specified: " priority))
-							)
-						))
-						(fnInitAtPriority (lambda (priority)
-							(block
-								(
-									(patrolListPN (fnGetPatrolListAtPriority priority))
-									(firstObj (@ patrolListPN 0))
+								;	P0 objects never have parents
+								(= objPriority 0)
+									()
+								(block
+									(
+										(bestParentP0 (ADT_objFindNearest obj patrolTargetListP0 (fnPriorityClusterSize 0)))
+										(bestParentP1 (if (and (gr objPriority 1) (fnIsHubPriority 1)) (ADT_objFindNearest obj patrolTargetListP1 (fnPriorityClusterSize 1)) ()))
+										(bestParentP2 (if (and (gr objPriority 2) (fnIsHubPriority 2)) (ADT_objFindNearest obj patrolTargetListP2 (fnPriorityClusterSize 2)) ()))
+										(bestParentP3 (if (and (gr objPriority 3) (fnIsHubPriority 3)) (ADT_objFindNearest obj patrolTargetListP3 (fnPriorityClusterSize 3)) ()))
+									)
+									(if printDebugStats (dbgLog (cat
+										"finding best parent for: " obj
+										"\n\tobjPriority: " objPriority
+										"\n\tbestParent:"
+										"\n\t\tP0: " bestParentP0
+										"\n\t\tP1: " bestParentP1
+										"\n\t\tP2: " bestParentP2
+										"\n\t\tP3: " bestParentP3
+										"\n\tIsHubPriority:"
+										"\n\t\tP0: " (fnIsHubPriority 0)
+										"\n\t\tP1: " (fnIsHubPriority 1)
+										"\n\t\tP2: " (fnIsHubPriority 2)
+										"\n\t\tP3: " (fnIsHubPriority 3)
+										"\n\t\tP4: " (fnIsHubPriority 4)
+										"\n\tPriorityClusterSize:"
+										"\n\t\tP0: " (fnPriorityClusterSize 0)
+										"\n\t\tP1: " (fnPriorityClusterSize 1)
+										"\n\t\tP2: " (fnPriorityClusterSize 2)
+										"\n\t\tP3: " (fnPriorityClusterSize 3)
+										"\n\t\tP4: " (fnPriorityClusterSize 4)
+									)))
+									;	we always try to pick the lowest parent
+									(switch
+										bestParentP3
+											bestParentP3
+										bestParentP2
+											bestParentP2
+										bestParentP1
+											bestParentP1
+										bestParentP0
+											bestParentP0
+										()
+									)
 								)
-								(dbgLog (cat "fnInitAtPriority: (" priority ") found obj: " firstObj ))
-								(ADT_lnkMove patrolListPN 0 patrolList)
-								(curP= priority)
-								(fnSetObjPNAt priority firstObj)
 							)
 						))
-						(fnTakeBestAtPriority (lambda (priority bestPN)
-							(block
-								(
-									(patrolTargetListPN (fnGetPatrolListAtPriority priority))
-									(idx (find patrolTargetListPN bestPN))
-								)
-								(dbgLog (cat "fnTakeBestAtPRiority: (" priority " " bestPN ") found at idx: " idx))
-								(ADT_lnkMove patrolTargetListPN idx patrolList)
-								(curP= priority)
-								(fnSetObjPNAt priority bestPN)
-							)
-						))
-						(fnTakeFallbackAtPriority (lambda (priority srcObj)
-							(block
-								(
-									(patrolTargetListPN (fnGetPatrolListAtPriority priority))
-									(bestPN (ADT_objFindNearest srcObj patrolTargetListPN))
-									(idx (find patrolTargetListPN bestPN))
-								)
-								(dbgLog (cat "fnTakeFallbackAtPriority: (" priority " " srcObj ") found at idx: " idx))
-								(ADT_lnkMove patrolTargetListPN idx patrolList)
-								(curP= priority)
-								(fnSetObjPNAt priority bestPN)
-							)
-						))
-					)
-
-					;	Define helper functions
-
-					;	Populate the patrol target list
-
-					(if (ls (+ (count patrolTargetListP0) (count patrolTargetListP1) (count patrolTargetListP2) (count patrolTargetListP3) (count patrolTargetListP4)) 3)
-						(block
+						(fnObjKey (lambda (obj) (cat "" (objGetID obj))))
+						(fnObjFromKey (lambda (key) (objGetObjByID (int key))))
+						(parentMap (block
 							(
-								(theMarker (sysCreateMarker
-									(cat "adt.patrol_marker_inner_" (objGetID gSource))
-									randomInnerSystemLocation
-									'Nil
-								))
+								(parentMap { })
 							)
-							(lnkAppend patrolTargetListP4 theMarker)
-							(lnkAppend markerList (objGetID theMarker))
-						)
-					)
-					(if (ls (+ (count patrolTargetListP0) (count patrolTargetListP1) (count patrolTargetListP2) (count patrolTargetListP3) (count patrolTargetListP4)) 3)
-						(block
+							;	Priority 0 keys are always nil
+							(enum patrolTargetListP1 patrolObj (set@ parentMap (fnObjKey patrolObj) (fnFindBestParent patrolObj 1)))
+							(enum patrolTargetListP2 patrolObj (set@ parentMap (fnObjKey patrolObj) (fnFindBestParent patrolObj 2)))
+							(enum patrolTargetListP3 patrolObj (set@ parentMap (fnObjKey patrolObj) (fnFindBestParent patrolObj 3)))
+							(enum patrolTargetListP4 patrolObj (set@ parentMap (fnObjKey patrolObj) (fnFindBestParent patrolObj 4)))
+							parentMap
+						))
+						(parentMapKeys (map
+							(append
+								patrolTargetListP0
+								patrolTargetListP1
+								patrolTargetListP2
+								patrolTargetListP3
+								patrolTargetListP4
+							)
+							patrolObj
+							(fnObjKey patrolObj)
+						))
+						(priorityMap (block
 							(
-								(theMarker (sysCreateMarker
-									(cat "adt.patrol_marker_outer_" (objGetID gSource))
-									randomOuterSystemLocation
-									'Nil
-								))
+								(priorityMap { })
 							)
-							(lnkAppend patrolTargetListP4 theMarker)
-							(lnkAppend markerList (objGetID theMarker))
-						)
-					)
-
-					;	Track any special markers we created for ourself
-
-					(objSet@ gSource "adt.objCreate.patrol.ownedMarkers" markerList)
-
-					;	Figure out the order in which we patrol
-
-					(while (or 
-							patrolTargetListP0
-							patrolTargetListP1
-							patrolTargetListP2
-							patrolTargetListP3
-							patrolTargetListP4
-							)
-						(block
-							(
-								(enableDebugPrints ())
-							)
-							(if enableDebugPrints (dbgLog
-								(cat
-									"Num targets:\t"
-									(count patrolTargetListP0)
-									"\t"
-									(count patrolTargetListP1)
-									"\t"
-									(count patrolTargetListP2)
-									"\t"
-									(count patrolTargetListP3)
-									"\t"
-									(count patrolTargetListP4)
-									"\nCurrent objects:"
-									(objP0)
-									"\t"
-									(objP1)
-									"\t"
-									(objP2)
-									"\t"
-									(objP3)
-									"\t"
-									(objP4)
-									"\nCurrent priority level:"
-									(curP)
-									"\nNumber of accumulated patrol targets:"
-									(count patrolList)
-								)
-							))
-
-							;	See if there are any valid subordinate objects in range to add
+							(enum patrolTargetListP0 patrolObj (set@ priorityMap (fnObjKey patrolObj) 0))
+							(enum patrolTargetListP1 patrolObj (set@ priorityMap (fnObjKey patrolObj) 1))
+							(enum patrolTargetListP2 patrolObj (set@ priorityMap (fnObjKey patrolObj) 2))
+							(enum patrolTargetListP3 patrolObj (set@ priorityMap (fnObjKey patrolObj) 3))
+							(enum patrolTargetListP4 patrolObj (set@ priorityMap (fnObjKey patrolObj) 4))
+							priorityMap
+						))
+						(patrolHubs (map parentMapKeys 'excludeNil objKey (if (@ parentMap objKey) () (fnObjFromKey objKey))))
+						(fnFindClosestHigherHub (lambda (obj objPriority)
 							(switch
-
-								;	Initialize if we are empty
-								(not patrolList)
-									(block ()
-										(switch
-											patrolTargetListP0
-												(fnInitAtPriority 0)
-											
-											patrolTargetListP1
-												(fnInitAtPriority 1)
-											
-											patrolTargetListP2
-												(fnInitAtPriority 2)
-											
-											patrolTargetListP3
-												(fnInitAtPriority 3)
-											
-											(fnInitAtPriority 4)
+								(= objPriority 0)
+									()
+								(ADT_objFindNearest obj
+									(map (@ patrolHubs) 'excludeNil objKey
+										(if (gr (@ priorityMap key) objPriority)
+											;;	Ignore all objects with worse priority
+											()
+											;;	Otherwise the object is a candidate
+											(fnObjFromKey key)
 										)
 									)
-
-								(= (curP) 0)
-									(block
-										(
-											(bestP1 (ADT_objFindNearest (objP0) patrolTargetListP1 maxClusterDist))
-											(bestP2 (ADT_objFindNearest (objP0) patrolTargetListP2 maxClusterDist))
-											(bestP3 (ADT_objFindNearest (objP0) patrolTargetListP3 maxClusterDist))
-											(bestP4 (ADT_objFindNearest (objP0) patrolTargetListP4 maxClusterDist))
-										)
-										(switch
-											bestP1
-												(fnTakeBestAtPriority 1 bestP1)
-											bestP2
-												(fnTakeBestAtPriority 2 bestP2)
-											bestP3
-												(fnTakeBestAtPriority 3 bestP3)
-											bestP4
-												(fnTakeBestAtPriority 4 bestP4)
-
-											;	Otherwise we add the next max priority obj
-
-											(switch
-												patrolTargetListP0
-													(fnTakeFallbackAtPriority 0 (objP0))
-												patrolTargetListP1
-													(fnTakeFallbackAtPriority 1 (objP0))
-												patrolTargetListP2
-													(fnTakeFallbackAtPriority 2 (objP0))
-												patrolTargetListP3
-													(fnTakeFallbackAtPriority 3 (objP0))
-												patrolTargetListP4
-													(fnTakeFallbackAtPriority 4 (objP0))
-												;	This code should not be reachable - not fatal if reached
-												(dbgLog "Something went wrong in searching for the closest fallback object. No other objects were found. This is not a fatal error.")
-											)
-										)
-									)
-								(= (curP) 1)
-									(block
-										(
-											(bestP2 (ADT_objFindNearest (objP1) patrolTargetListP2 maxClusterDist))
-											(bestP3 (ADT_objFindNearest (objP1) patrolTargetListP3 maxClusterDist))
-											(bestP4 (ADT_objFindNearest (objP1) patrolTargetListP4 maxClusterDist))
-											;	In case we need to fall back to a peer
-											(bestP1 (ADT_objFindNearest (objP1) patrolTargetListP1 maxClusterDist))
-											(bestP1_0 (ADT_objFindNearest (objP0) patrolTargetListP1 maxClusterDist))
-										)
-										(switch
-											bestP2
-												(fnTakeBestAtPriority 2 bestP2)
-											bestP3
-												(fnTakeBestAtPriority 3 bestP3)
-											bestP4
-												(fnTakeBestAtPriority 4 bestP4)
-											;	Try falling back to a nearby peer
-											bestP1
-												(fnTakeBestAtPriority 1 bestP1)
-											bestP1_0
-												(fnTakeBestAtPriority 1 bestP1_0)
-
-											;	Otherwise we add the next max priority obj
-
-											(switch
-												patrolTargetListP0
-													(fnTakeFallbackAtPriority 0 (objP1))
-												patrolTargetListP1
-													(fnTakeFallbackAtPriority 1 (objP1))
-												patrolTargetListP2
-													(fnTakeFallbackAtPriority 2 (objP1))
-												patrolTargetListP3
-													(fnTakeFallbackAtPriority 3 (objP1))
-												patrolTargetListP4
-													(fnTakeFallbackAtPriority 4 (objP1))
-												;	This code should not be reachable - not fatal if reached
-												(dbgLog "Something went wrong in searching for the closest fallback object. No other objects were found. This is not a fatal error.")
-											)
-										)
-									)
-								(= (curP) 2)
-									(block
-										(
-											(bestP3 (ADT_objFindNearest (objP2) patrolTargetListP3 maxClusterDist))
-											(bestP4 (ADT_objFindNearest (objP2) patrolTargetListP4 maxClusterDist))
-											;	In case we need to fall back to a peer
-											(bestP2 (ADT_objFindNearest (objP2) patrolTargetListP2 maxClusterDist))
-											(bestP2_1 (ADT_objFindNearest (objP1) patrolTargetListP2 maxClusterDist))
-											(bestP2_0 (ADT_objFindNearest (objP0) patrolTargetListP2 maxClusterDist))
-											(bestP1 (ADT_objFindNearest (objP1) patrolTargetListP1 maxClusterDist))
-											(bestP1_0 (ADT_objFindNearest (objP0) patrolTargetListP1 maxClusterDist))
-										)
-										(switch
-											bestP3
-												(fnTakeBestAtPriority 3 bestP3)
-											bestP4
-												(fnTakeBestAtPriority 4 bestP4)
-											;	Try falling back to a nearby peer
-											bestP2
-												(fnTakeBestAtPriority 2 bestP2)
-											bestP2_1
-												(fnTakeBestAtPriority 2 bestP2_1)
-											bestP2_0
-												(fnTakeBestAtPriority 2 bestP2_0)
-											bestP1
-												(fnTakeBestAtPriority 1 bestP1)
-											bestP1_0
-												(fnTakeBestAtPriority 1 bestP1_0)
-
-											;	Otherwise we add the next max priority obj
-
-											(switch
-												patrolTargetListP0
-													(fnTakeFallbackAtPriority 0 (objP2))
-												patrolTargetListP1
-													(fnTakeFallbackAtPriority 1 (objP2))
-												patrolTargetListP2
-													(fnTakeFallbackAtPriority 2 (objP2))
-												patrolTargetListP3
-													(fnTakeFallbackAtPriority 3 (objP2))
-												patrolTargetListP4
-													(fnTakeFallbackAtPriority 4 (objP2))
-												;	This code should not be reachable - not fatal if reached
-												(dbgLog "Something went wrong in searching for the closest fallback object. No other objects were found. This is not a fatal error.")
-											)
-										)
-									)
-								(= (curP) 3)
-									(block
-										(
-											(bestP4 (ADT_objFindNearest (objP3) patrolTargetListP4 maxClusterDist))
-											;	In case we need to fall back to a peer
-											(bestP3 (ADT_objFindNearest (objP3) patrolTargetListP3 maxClusterDist))
-											(bestP3_2 (ADT_objFindNearest (objP2) patrolTargetListP3 maxClusterDist))
-											(bestP3_1 (ADT_objFindNearest (objP1) patrolTargetListP3 maxClusterDist))
-											(bestP3_0 (ADT_objFindNearest (objP0) patrolTargetListP3 maxClusterDist))
-											(bestP2 (ADT_objFindNearest (objP2) patrolTargetListP2 maxClusterDist))
-											(bestP2_1 (ADT_objFindNearest (objP1) patrolTargetListP2 maxClusterDist))
-											(bestP2_0 (ADT_objFindNearest (objP0) patrolTargetListP2 maxClusterDist))
-											(bestP1 (ADT_objFindNearest (objP1) patrolTargetListP1 maxClusterDist))
-											(bestP1_0 (ADT_objFindNearest (objP0) patrolTargetListP1 maxClusterDist))
-										)
-										(switch
-											bestP4
-												(fnTakeBestAtPriority 4 bestP4)
-											;	Try falling back to a nearby peer
-											bestP3
-												(fnTakeBestAtPriority 3 bestP3)
-											bestP3_2
-												(fnTakeBestAtPriority 3 bestP3_2)
-											bestP3_1
-												(fnTakeBestAtPriority 3 bestP3_1)
-											bestP3_0
-												(fnTakeBestAtPriority 3 bestP3_0)
-											bestP2
-												(fnTakeBestAtPriority 2 bestP2)
-											bestP2_1
-												(fnTakeBestAtPriority 2 bestP2_1)
-											bestP2_0
-												(fnTakeBestAtPriority 2 bestP2_0)
-											bestP1
-												(fnTakeBestAtPriority 1 bestP1)
-											bestP1_0
-												(fnTakeBestAtPriority 1 bestP1_0)
-
-											;	Otherwise we add the next max priority obj
-
-											(switch
-												patrolTargetListP0
-													(fnTakeFallbackAtPriority 0 (objP3))
-												patrolTargetListP1
-													(fnTakeFallbackAtPriority 1 (objP3))
-												patrolTargetListP2
-													(fnTakeFallbackAtPriority 2 (objP3))
-												patrolTargetListP3
-													(fnTakeFallbackAtPriority 3 (objP3))
-												patrolTargetListP4
-													(fnTakeFallbackAtPriority 4 (objP3))
-												;	This code should not be reachable - not fatal if reached
-												(dbgLog "Something went wrong in searching for the closest fallback object. No other objects were found. This is not a fatal error.")
-											)
-										)
-									)
-								(= (curP) 4)
-									(block
-										(
-											;	We can only search for peers as the lowest priority group
-											(bestP4 (ADT_objFindNearest (objP4) patrolTargetListP4 maxClusterDist))
-											(bestP4_3 (ADT_objFindNearest (objP3) patrolTargetListP4 maxClusterDist))
-											(bestP4_2 (ADT_objFindNearest (objP2) patrolTargetListP4 maxClusterDist))
-											(bestP4_1 (ADT_objFindNearest (objP1) patrolTargetListP4 maxClusterDist))
-											(bestP4_0 (ADT_objFindNearest (objP0) patrolTargetListP4 maxClusterDist))
-											(bestP3 (ADT_objFindNearest (objP3) patrolTargetListP3 maxClusterDist))
-											(bestP3_2 (ADT_objFindNearest (objP2) patrolTargetListP3 maxClusterDist))
-											(bestP3_1 (ADT_objFindNearest (objP1) patrolTargetListP3 maxClusterDist))
-											(bestP3_0 (ADT_objFindNearest (objP0) patrolTargetListP3 maxClusterDist))
-											(bestP2 (ADT_objFindNearest (objP2) patrolTargetListP2 maxClusterDist))
-											(bestP2_1 (ADT_objFindNearest (objP1) patrolTargetListP2 maxClusterDist))
-											(bestP2_0 (ADT_objFindNearest (objP0) patrolTargetListP2 maxClusterDist))
-											(bestP1 (ADT_objFindNearest (objP1) patrolTargetListP1 maxClusterDist))
-											(bestP1_0 (ADT_objFindNearest (objP0) patrolTargetListP1 maxClusterDist))
-										)
-										(switch
-											bestP4
-												(fnTakeBestAtPriority 4 bestP4)
-											bestP4_3
-												(fnTakeBestAtPriority 4 bestP4_3)
-											bestP4_2
-												(fnTakeBestAtPriority 4 bestP4_2)
-											bestP4_1
-												(fnTakeBestAtPriority 4 bestP4_1)
-											bestP4_0
-												(fnTakeBestAtPriority 4 bestP4_0)
-											bestP3
-												(fnTakeBestAtPriority 3 bestP3)
-											bestP3_2
-												(fnTakeBestAtPriority 3 bestP3_2)
-											bestP3_1
-												(fnTakeBestAtPriority 3 bestP3_1)
-											bestP3_0
-												(fnTakeBestAtPriority 3 bestP3_0)
-											bestP2
-												(fnTakeBestAtPriority 2 bestP2)
-											bestP2_1
-												(fnTakeBestAtPriority 2 bestP2_1)
-											bestP2_0
-												(fnTakeBestAtPriority 2 bestP2_0)
-											bestP1
-												(fnTakeBestAtPriority 1 bestP1)
-											bestP1_0
-												(fnTakeBestAtPriority 1 bestP1_0)
-
-											;	Otherwise we add the next max priority obj
-
-											(switch
-												patrolTargetListP0
-													(fnTakeFallbackAtPriority 0 (objP4))
-												patrolTargetListP1
-													(fnTakeFallbackAtPriority 1 (objP4))
-												patrolTargetListP2
-													(fnTakeFallbackAtPriority 2 (objP4))
-												patrolTargetListP3
-													(fnTakeFallbackAtPriority 3 (objP4))
-												patrolTargetListP4
-													(fnTakeFallbackAtPriority 4 (objP4))
-												;	This code should not be reachable - not fatal if reached
-												(dbgLog "Something went wrong in searching for the closest fallback object. No other objects were found. This is not a fatal error.")
-											)
-										)
-									)
-								;	This code should not be reachable - this might be an error
-								(error (cat "Something went wrong in searching for the next patrol target object. In invalid patrol level was specified: " (curP)))
+								)
 							)
+						))
+						(unparentedHubs (list ))
+						(patrolHubMap (block
+							(
+								(patrolHubMap { })
+								(skipChildOnly (obj@ gSource "adt.objCreate.patrol.skipClusteredChildren"))
+								(hubKey (fnObjKey hubObj))
+							)
+							;	populate keys and empty lists
 							
-						)
+							(enum patrolHubs hubObj (set@ patrolHubMap hubKey (list )))
+							(if printDebugStats (dbgLog (cat "patrolHubMap initial: " patrolHubMap)))
+
+							;	populate hubs that are parented to other hubs in the lists of the parent hub
+							
+							(enum patrolHubs hubObj
+								(block
+									(
+										(higherObj (fnFindClosestHigherHub hubObj (@ priorityMap hubKey)))
+										(objKey (fnObjKey higherObj))
+										(childList (@ patrolHubMap objKey))
+									)
+									(if higherObj
+										(if childList
+											(lnkAppend childList hubObj)
+											;	we need to use this workaround because set@ doesnt add nils to structs...
+											(set@ patrolHubMap (list hubObj))
+										)
+										;	Record any hubs that have no parent
+										(lnkAppend unparentedHubs hubObj)
+									)
+								)
+							)
+							(if printDebugStats (dbgLog (cat "patrolHubMap parented: " patrolHubMap)))
+							
+							;	if we dont skip them add parented objects with no children
+							
+							(if skipChildOnly
+								;	skip
+								()
+								;	otherwise add them to their immediate parent
+								(enum
+									(map parentMapKeys '(excludeNil original) objKey (@ parentMap key))
+									childObjectKey
+									(if (@ patrolHubs childObjectKey)
+										;	If this has children it was already added
+										()
+										;	If it has no children we need to add it
+										(block
+											(
+												(objKey (fnObjKey (@ parentMap childObjectKey)))
+												(childObj (fnObjFromKey childObjectKey))
+												(childList (@ patrolHubMap objKey))
+											)
+											(if childList
+												(lnkAppend childList childObj)
+												;	we need to use this workaround because set@ doesnt add nils to structs...
+												(set@ patrolHubMap (list childObj))
+											)
+										)
+									)
+								)
+							)
+							(if printDebugStats (dbgLog (cat "patrolHubMap final: " patrolHubMap)))
+							
+							;	return the final map
+							
+							patrolHubMap
+						))
+
+						;	init patrol path
+						(patrolPath (list ))
+
+						;	helper fn
+						(fnGreedySortFrom (lambda (startObj destObjList)
+							(block
+								(
+									;	Copy the list since we will mutate it and also remove startobj if present
+									(destObjs (map destObjList 'excludeNil destObj (if (= destObj startObj) () destObj)))
+									(sortedObjs (list ))
+									(curObj startObj)
+								)
+								(while destObjs
+									(block
+										(
+											(nearestObj (ADT_objFindNearest curObj destObjs))
+										)
+										(lnkAppend sortedObjs nearestObj)
+										(lnkRemove destObjs (find destObjs nearestObj))
+										(setq curObj nearestObj)
+									)
+								)
+								sortedObjs
+							)
+						))
+						(fnAddToPatrolPath (lambda (hubObj)
+							(block
+								(
+									(childObjsToAdd (@ patrolHubMap (objKey hubObj)))
+									(sortedChildObjsToAdd (fnGreedySortFrom (if shuffleOrder (random childObjsToAdd) hubObj) childObjsToAdd))
+								)
+								(lnkAppend patrolPath hubObj)
+								(if childObjsToAdd
+									(block ()
+										;	Go to each child object as a hub
+										(enum childObjsToAdd childObj
+											(fnAddToPatrolPath childObj)
+										)
+										;	Return to the hub object
+										(lnkAppend patrolPath hubObj)
+									)
+								)
+							)
+						))
+
+						;	get root hubs to start from
+						(rootHubs (fnGreedySortFrom (random unparentedHubs) unparentedHubs))
+					)
+
+					;	Generate patrol path
+					(enum rootHubs rootHub (fnAddToPatrolPath rootHub))
+
+					;	Debug print
+					(if printDebugStats
+						(dbgLog (cat
+							"parent map:\t" parentMap
+							"\npriority map:\t" priorityMap
+							"\npatrol hubs:\t" patrolHubs
+							"\npatrol hub map:\t" patrolHubMap
+							"\npatrol path:\t" patrolPath
+							"\nunparented hubs:\t" unparentedHubs
+							"\nroot hubs:\t" rootHubs
+						))
 					)
 
 					;	Convert from pointers to spaceObj IDs
 
-					(map patrolList patrolObj (objGetID patrolObj))
+					(map patrolPath patrolObj (objGetID patrolObj))
 				)
 			</DynamicData>
 
@@ -1532,6 +1368,8 @@
 					;;	Sort Creatable Types
 					(setq ADT_sortKeyObjectTypes (lambda (typ)
 						(cat
+							"VIRTUAL:"
+							(typMatches theType "V")
 							"TYPE_PRIORITY:"
 							(hex (ADT_typCategoryPriority obj) 8)
 							"\nSOVEREIGN:"
